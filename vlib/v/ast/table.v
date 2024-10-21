@@ -650,6 +650,11 @@ pub fn (t &Table) resolve_common_sumtype_fields(mut sym TypeSymbol) {
 }
 
 @[inline]
+pub fn (t &Table) find_type(name string) Type {
+	return idx_to_type(t.type_idxs[name])
+}
+
+@[inline]
 pub fn (t &Table) find_type_idx(name string) int {
 	return t.type_idxs[name]
 }
@@ -691,6 +696,7 @@ pub const invalid_type_symbol = &TypeSymbol{
 	kind:       .placeholder
 	name:       'InvalidType'
 	cname:      'InvalidType'
+	is_builtin: false
 }
 
 @[inline]
@@ -765,8 +771,9 @@ fn (mut t Table) rewrite_already_registered_symbol(typ TypeSymbol, existing_idx 
 		// override placeholder
 		t.type_symbols[existing_idx] = &TypeSymbol{
 			...typ
-			methods: existing_symbol.methods
-			idx:     existing_idx
+			methods:    existing_symbol.methods
+			idx:        existing_idx
+			is_builtin: existing_symbol.is_builtin
 		}
 		return existing_idx
 	}
@@ -779,14 +786,16 @@ fn (mut t Table) rewrite_already_registered_symbol(typ TypeSymbol, existing_idx 
 			unsafe {
 				*existing_symbol = &TypeSymbol{
 					...typ
-					kind: existing_symbol.kind
-					idx:  existing_idx
+					kind:       existing_symbol.kind
+					idx:        existing_idx
+					is_builtin: existing_symbol.is_builtin
 				}
 			}
 		} else {
 			t.type_symbols[existing_idx] = &TypeSymbol{
 				...typ
-				idx: existing_idx
+				idx:        existing_idx
+				is_builtin: existing_symbol.is_builtin
 			}
 		}
 		return existing_idx
@@ -1162,7 +1171,8 @@ pub fn (mut t Table) find_or_register_array_with_dims(elem_type Type, nr_dims in
 	if nr_dims == 1 {
 		return t.find_or_register_array(elem_type)
 	}
-	return t.find_or_register_array(t.find_or_register_array_with_dims(elem_type, nr_dims - 1))
+	return t.find_or_register_array(idx_to_type(t.find_or_register_array_with_dims(elem_type,
+		nr_dims - 1)))
 }
 
 pub fn (mut t Table) find_or_register_array_fixed(elem_type Type, size int, size_expr Expr, is_fn_ret bool) int {
@@ -1254,11 +1264,12 @@ pub fn (mut t Table) add_placeholder_type(name string, language Language) int {
 		modname = name.all_before_last('.')
 	}
 	ph_type := TypeSymbol{
-		kind:     .placeholder
-		name:     name
-		cname:    util.no_dots(name).replace_each(['&', ''])
-		language: language
-		mod:      modname
+		kind:       .placeholder
+		name:       name
+		cname:      util.no_dots(name).replace_each(['&', ''])
+		language:   language
+		mod:        modname
+		is_builtin: name in builtins
 	}
 	return t.register_sym(ph_type)
 }
@@ -1416,10 +1427,11 @@ pub fn (t &Table) is_interface_smartcast(var ScopeObject) bool {
 pub fn (t &Table) known_type_names() []string {
 	mut res := []string{cap: t.type_idxs.len}
 	for _, idx in t.type_idxs {
+		typ := idx_to_type(idx)
 		// Skip `int_literal_type_idx` and `float_literal_type_idx` because they shouldn't be visible to the User.
-		if idx !in [0, int_literal_type_idx, float_literal_type_idx] && t.known_type_idx(idx)
-			&& t.sym(idx).kind != .function {
-			res << t.type_to_str(idx)
+		if idx !in [0, int_literal_type_idx, float_literal_type_idx] && t.known_type_idx(typ)
+			&& t.sym(typ).kind != .function {
+			res << t.type_to_str(typ)
 		}
 	}
 	return res
@@ -1449,6 +1461,7 @@ pub fn (mut t Table) complete_interface_check() {
 		util.timing_measure(@METHOD)
 	}
 	for tk, mut tsym in t.type_symbols {
+		tk_typ := idx_to_type(tk)
 		if tsym.kind != .struct {
 			continue
 		}
@@ -1460,11 +1473,11 @@ pub fn (mut t Table) complete_interface_check() {
 			if idecl.methods.len == 0 && idecl.fields.len == 0 && tsym.mod != t.sym(idecl.typ).mod {
 				continue
 			}
-			if t.does_type_implement_interface(tk, idecl.typ) {
+			if t.does_type_implement_interface(tk_typ, idecl.typ) {
 				$if trace_types_implementing_each_interface ? {
 					eprintln('>>> tsym.mod: ${tsym.mod} | tsym.name: ${tsym.name} | tk: ${tk} | idecl.name: ${idecl.name} | idecl.typ: ${idecl.typ}')
 				}
-				t.iface_types[idecl.name] << tk
+				t.iface_types[idecl.name] << tk_typ
 			}
 		}
 	}
@@ -1593,7 +1606,7 @@ pub fn (mut t Table) convert_generic_static_type_name(fn_name string, generic_na
 			valid_generic := util.is_generic_type_name(generic_name)
 				&& generic_name in generic_names
 			if valid_generic {
-				name_type := idx_to_type(t.find_type_idx(generic_name)).set_flag(.generic)
+				name_type := t.find_type(generic_name).set_flag(.generic)
 				if typ := t.convert_generic_type(name_type, generic_names, concrete_types) {
 					return '${t.type_to_str(typ)}${fn_name[index..]}'
 				}
@@ -2129,7 +2142,7 @@ pub fn (mut t Table) unwrap_generic_type_ex(typ Type, generic_names []string, co
 				info:   info
 				is_pub: ts.is_pub
 			)
-			mut ts_copy := t.sym(new_idx)
+			mut ts_copy := t.sym(idx_to_type(new_idx))
 			for method in all_methods {
 				ts_copy.register_method(method)
 			}
@@ -2585,6 +2598,6 @@ pub fn (mut t Table) get_veb_result_type_idx() int {
 		return t.veb_res_idx_cache
 	}
 
-	t.veb_res_idx_cache = t.find_type_idx('veb.Result')
+	t.veb_res_idx_cache = t.find_type('veb.Result')
 	return t.veb_res_idx_cache
 }

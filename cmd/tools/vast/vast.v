@@ -1028,7 +1028,8 @@ fn (t Tree) comptime_call(node ast.ComptimeCall) &Node {
 	obj.add_terse('method_name', t.string_node(node.method_name))
 	obj.add_terse('left', t.expr(node.left))
 	obj.add_terse('is_vweb', t.bool_node(node.is_vweb))
-	obj.add_terse('vweb_tmpl', t.string_node(node.vweb_tmpl.path))
+	obj.add_terse('is_veb', t.bool_node(node.is_veb))
+	obj.add_terse('veb_tmpl', t.string_node(node.veb_tmpl.path))
 	obj.add_terse('args_var', t.string_node(node.args_var))
 	obj.add_terse('has_parens', t.bool_node(node.has_parens))
 	obj.add_terse('is_embed', t.bool_node(node.is_embed))
@@ -1823,6 +1824,8 @@ fn (t Tree) sql_stmt_line(node ast.SqlStmtLine) &Node {
 	obj.add_terse('updated_columns', t.array_node_string(node.updated_columns))
 	obj.add_terse('update_exprs', t.array_node_expr(node.update_exprs))
 	obj.add('pos', t.pos(node.pos))
+	obj.add('pre_comments', t.array_node_comment(node.pre_comments))
+	obj.add('end_comments', t.array_node_comment(node.end_comments))
 
 	sub_struct_map := new_object()
 	for key, val in node.sub_structs {
