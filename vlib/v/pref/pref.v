@@ -255,6 +255,7 @@ pub mut:
 	relaxed_gcc14 bool = true // turn on the generated pragmas, that make gcc versions > 14 a lot less pedantic. The default is to have those pragmas in the generated C output, so that gcc-14 can be used on Arch etc.
 	//
 	subsystem Subsystem // the type of the window app, that is going to be generated; has no effect on !windows
+	is_vls    bool
 }
 
 pub struct LineInfo {
@@ -796,12 +797,14 @@ pub fn parse_args_and_show_errors(known_external_commands []string, args []strin
 			}
 			'-w' {
 				res.skip_warnings = true
+				res.warns_are_errors = false
 			}
 			'-N' {
 				res.notes_are_errors = true
 			}
 			'-n' {
 				res.skip_notes = true
+				res.notes_are_errors = false
 			}
 			'-no-rsp' {
 				res.no_rsp = true
