@@ -622,7 +622,7 @@ fn test_trim_space() {
 	assert a.trim_space_right() == ' a'
 
 	code := '
-
+\t
 fn main() {
         println(2)
 }
@@ -632,7 +632,7 @@ fn main() {
         println(2)
 }'
 	code_trim_right := '
-
+\t
 fn main() {
         println(2)
 }'
@@ -744,6 +744,11 @@ fn test_replace_char() {
 fn test_normalize_tabs() {
 	assert '\t\tHello!'.normalize_tabs(4) == '        Hello!'
 	assert '\t\tHello!\t; greeting'.normalize_tabs(1) == '  Hello! ; greeting'
+}
+
+fn test_expand_tabs() {
+	assert 'AB\tHello!'.expand_tabs(4) == 'AB  Hello!'
+	assert 'AB\t\tHello!\t; greeting'.expand_tabs(4) == 'AB      Hello!  ; greeting'
 }
 
 fn test_itoa() {
@@ -1019,7 +1024,7 @@ fn test_bytes_to_string() {
 }
 
 fn test_charptr() {
-	foo := &char('VLANG'.str)
+	foo := &char(c'VLANG')
 	assert typeof(foo).name == '&char'
 	assert unsafe { foo.vstring() } == 'VLANG'
 	assert unsafe { foo.vstring_with_len(3) } == 'VLA'
