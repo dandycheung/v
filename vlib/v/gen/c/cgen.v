@@ -270,6 +270,8 @@ mut:
 	defer_return_tmp_var string
 	vweb_filter_fn_name  string   // vweb__filter or x__vweb__filter, used by $vweb.html() for escaping strings in the templates, depending on which `vweb` import is used
 	export_funcs         []string // for .dll export function names
+	//
+	type_default_impl_level int
 }
 
 @[heap]
@@ -500,6 +502,7 @@ pub fn gen(files []&ast.File, mut table ast.Table, pref_ &pref.Preferences) GenO
 	global_g.gen_array_index_methods()
 	global_g.gen_equality_fns()
 	global_g.gen_free_methods()
+	global_g.register_iface_return_types()
 	global_g.write_results()
 	global_g.write_options()
 	global_g.sort_globals_consts()
@@ -991,6 +994,9 @@ pub fn (mut g Gen) init() {
 			g.cheaders.writeln('#define VNOFLOAT 1')
 		}
 		g.cheaders.writeln(c_builtin_types)
+		if !g.pref.skip_unused || g.table.used_features.used_maps > 0 {
+			g.cheaders.writeln(c_mapfn_callback_types)
+		}
 		if g.pref.is_bare {
 			g.cheaders.writeln(c_bare_headers)
 		} else {
@@ -1750,6 +1756,9 @@ static inline void __${sym.cname}_pushval(${sym.cname} ch, ${push_arg} val) {
 				}
 			}
 			.map {
+				if g.pref.skip_unused && g.table.used_features.used_maps == 0 {
+					continue
+				}
 				g.type_definitions.writeln('typedef map ${sym.cname};')
 			}
 			else {
@@ -1883,7 +1892,6 @@ pub fn (mut g Gen) write_fn_typesymbol_declaration(sym ast.TypeSymbol) {
 	if !info.has_decl && (not_anon || is_fn_sig) && !func.return_type.has_flag(.generic)
 		&& !has_generic_arg {
 		fn_name := sym.cname
-
 		mut call_conv := ''
 		mut msvc_call_conv := ''
 		for attr in func.attrs {
@@ -4471,7 +4479,7 @@ fn (mut g Gen) gen_closure_fn(expr_styp string, m ast.Fn, name string) {
 			method_name = g.generic_fn_name(rec_sym.info.concrete_types, m.name)
 		}
 	}
-	if rec_sym.info is ast.Interface {
+	if rec_sym.info is ast.Interface && rec_sym.info.get_methods().contains(method_name) {
 		left_cc_type := g.cc_type(g.table.unaliased_type(receiver.typ), false)
 		left_type_name := util.no_dots(left_cc_type)
 		sb.write_string('${c_name(left_type_name)}_name_table[a0->_typ]._method_${method_name}(')
@@ -5287,8 +5295,9 @@ fn (mut g Gen) ident(node ast.Ident) {
 				obj_sym := g.table.sym(g.unwrap_generic(node.obj.typ))
 				if !prevent_sum_type_unwrapping_once {
 					nested_unwrap := node.obj.smartcasts.len > 1
-					if is_option && nested_unwrap && obj_sym.kind == .sum_type {
-						g.write('*(')
+					unwrap_sumtype := is_option && nested_unwrap && obj_sym.kind == .sum_type
+					if unwrap_sumtype {
+						g.write('(*(')
 					}
 					for i, typ in node.obj.smartcasts {
 						is_option_unwrap := i == 0 && is_option
@@ -5378,6 +5387,9 @@ fn (mut g Gen) ident(node ast.Ident) {
 								} else if !is_option_unwrap
 									&& obj_sym.kind in [.sum_type, .interface] {
 									g.write('${dot}_${cast_sym.cname}')
+								}
+								if i != 0 && unwrap_sumtype {
+									g.write(')')
 								}
 							}
 						}
@@ -5796,7 +5808,7 @@ fn (mut g Gen) return_stmt(node ast.Return) {
 
 	exprs_len := node.exprs.len
 	expr0 := if exprs_len > 0 { node.exprs[0] } else { ast.empty_expr }
-	type0 := if exprs_len > 0 { node.types[0] } else { ast.void_type }
+	type0 := if exprs_len > 0 { g.unwrap_generic(node.types[0]) } else { ast.void_type }
 
 	if exprs_len > 0 {
 		// skip `return $vweb.html()`
@@ -5808,15 +5820,15 @@ fn (mut g Gen) return_stmt(node ast.Return) {
 			return
 		}
 	}
-	ret_type := g.fn_decl.return_type
+	ret_type := g.unwrap_generic(g.fn_decl.return_type)
 
 	// got to do a correct check for multireturn
-	sym := g.table.sym(g.unwrap_generic(ret_type))
+	sym := g.table.sym(ret_type)
 	mut fn_ret_type := ret_type
 	if sym.kind == .alias {
 		unaliased_type := g.table.unaliased_type(fn_ret_type)
 		if unaliased_type.has_option_or_result() {
-			fn_ret_type = unaliased_type
+			fn_ret_type = g.unwrap_generic(unaliased_type)
 		}
 	}
 	fn_return_is_multi := sym.kind == .multi_return
@@ -5846,7 +5858,7 @@ fn (mut g Gen) return_stmt(node ast.Return) {
 	}
 	tmpvar := g.new_tmp_var()
 	g.defer_return_tmp_var = tmpvar
-	ret_typ := g.ret_styp(g.unwrap_generic(fn_ret_type))
+	ret_typ := g.ret_styp(fn_ret_type)
 
 	// `return fn_call_opt()`
 	if exprs_len == 1 && (fn_return_is_option || fn_return_is_result) && expr0 is ast.CallExpr
@@ -6066,7 +6078,7 @@ fn (mut g Gen) return_stmt(node ast.Return) {
 				node.pos)
 		}
 		// normal return
-		return_sym := g.table.final_sym(g.unwrap_generic(type0))
+		return_sym := g.table.final_sym(type0)
 		// `return opt_ok(expr)` for functions that expect an option
 		expr_type_is_opt := match expr0 {
 			ast.CallExpr {
@@ -6103,7 +6115,7 @@ fn (mut g Gen) return_stmt(node ast.Return) {
 				g.writeln('${ret_typ} ${tmpvar};')
 				styp := g.base_type(fn_ret_type)
 				g.write('_option_ok(&(${styp}[]) { ')
-				if !g.unwrap_generic(fn_ret_type).is_ptr() && type0.is_ptr() {
+				if !fn_ret_type.is_ptr() && type0.is_ptr() {
 					if !(expr0 is ast.Ident && !g.is_amp) {
 						g.write('*')
 					}
@@ -6629,13 +6641,18 @@ fn (mut g Gen) write_types(symbols []&ast.TypeSymbol) {
 		if sym.name.starts_with('C.') {
 			continue
 		}
-		if sym.kind == .none {
+		if sym.kind == .none && (!g.pref.skip_unused || g.table.used_features.used_none > 0) {
 			g.type_definitions.writeln('struct none {')
 			g.type_definitions.writeln('\tEMPTY_STRUCT_DECLARATION;')
 			g.type_definitions.writeln('};')
 			g.typedefs.writeln('typedef struct none none;')
 		}
 		mut name := sym.scoped_cname()
+		if g.pref.skip_unused && g.table.used_features.used_maps == 0 {
+			if name in ['map', 'mapnode', 'SortedMap', 'MapMode', 'DenseArray'] {
+				continue
+			}
+		}
 		match sym.info {
 			ast.Struct {
 				if !struct_names[name] {
@@ -7241,6 +7258,16 @@ fn (mut g Gen) type_default(typ_ ast.Type) string {
 }
 
 fn (mut g Gen) type_default_impl(typ_ ast.Type, decode_sumtype bool) string {
+	g.type_default_impl_level++
+	defer {
+		g.type_default_impl_level--
+	}
+	if g.type_default_impl_level > 37 {
+		eprintln('>>> Gen.type_default_impl g.type_default_impl_level: ${g.type_default_impl_level} | typ_: ${typ_} | decode_sumtype: ${decode_sumtype}')
+	}
+	if g.type_default_impl_level > 40 {
+		verror('reached maximum levels of nesting for ${@LOCATION}')
+	}
 	typ := g.unwrap_generic(typ_)
 	if typ.has_flag(.option) {
 		return '(${g.styp(typ)}){.state=2, .err=_const_none__, .data={E_STRUCT}}'
@@ -7338,9 +7365,10 @@ fn (mut g Gen) type_default_impl(typ_ ast.Type, decode_sumtype bool) string {
 			if sym.language in [.c, .v] {
 				for field in info.fields {
 					field_sym := g.table.sym(field.typ)
-					if field.has_default_expr
+					is_option := field.typ.has_flag(.option)
+					if is_option || field.has_default_expr
 						|| field_sym.kind in [.enum, .array_fixed, .array, .map, .string, .bool, .alias, .i8, .i16, .int, .i64, .u8, .u16, .u32, .u64, .f32, .f64, .char, .voidptr, .byteptr, .charptr, .struct, .chan, .sum_type] {
-						if sym.language == .c && !field.has_default_expr {
+						if sym.language == .c && !field.has_default_expr && !is_option {
 							continue
 						}
 						field_name := c_name(field.name)
@@ -7688,6 +7716,22 @@ fn (g &Gen) has_been_referenced(fn_name string) bool {
 		referenced = g.referenced_fns[fn_name]
 	}
 	return referenced
+}
+
+fn (mut g Gen) register_iface_return_types() {
+	interfaces := g.table.type_symbols.filter(it.kind == .interface && it.info is ast.Interface)
+	for isym in interfaces {
+		inter_info := isym.info as ast.Interface
+		if inter_info.is_generic {
+			continue
+		}
+		for _, method_name in inter_info.get_methods() {
+			method := isym.find_method_with_generic_parent(method_name) or { continue }
+			if method.return_type.has_flag(.result) {
+				g.register_result(method.return_type)
+			}
+		}
+	}
 }
 
 // Generates interface table and interface indexes

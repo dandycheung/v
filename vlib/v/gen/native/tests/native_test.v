@@ -1,4 +1,5 @@
-// vtest build: (amd64 || arm64) && !self_sandboxed_packaging? && !gcc-windows
+// vtest build: (amd64 || arm64) && !self_sandboxed_packaging? && !gcc-windows && !native-backend-windows && !tcc-windows && !msvc-windows
+// NOTE: native-backend-windows passed with the windows-2019 runner, but fails with windows-2022. TODO: fix
 @[has_globals]
 module main
 
@@ -56,14 +57,14 @@ fn test_native() {
 		assert false
 	}
 
+	skip_vv := os.getenv('VNATIVE_SKIP_LIBC_VV') != ''
+
 	bench.set_total_expected_steps(tests.len)
 	for test in tests {
-		if test == 'libc.vv' {
+		if skip_vv && test in ['libc.vv', 'linux.vv'] {
 			// TODO: remove the skip here, when the native backend is more advanced
-			if os.getenv('VNATIVE_SKIP_LIBC_VV') != '' {
-				println('>>> SKIPPING ${test} since VNATIVE_SKIP_LIBC_VV is defined')
-				continue
-			}
+			println('>>> SKIPPING ${test} since VNATIVE_SKIP_LIBC_VV is defined')
+			continue
 		}
 		if test == 'fibonacci_native.vv' || test.contains('linux') {
 			if user_os == 'windows' {

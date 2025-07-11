@@ -13,8 +13,10 @@ pub mut:
 // new_thread_safe_log returns a new log structure, whose methods are safe
 // to call by multiple threads.
 pub fn new_thread_safe_log() &ThreadSafeLog {
+	slevel := $d('log_default_level', 'info')
+	level := level_from_tag(slevel.to_upper()) or { panic('invalid log_default_level: ${slevel}') }
 	mut x := &ThreadSafeLog{
-		level: .info
+		level: level
 	}
 	return x
 }
@@ -24,8 +26,9 @@ pub fn new_thread_safe_log() &ThreadSafeLog {
 pub fn (mut x ThreadSafeLog) free() {
 	unsafe {
 		// make sure other threads are not in the blocks protected by the mutex:
-		x.mu.try_lock()
-		x.mu.unlock()
+		if x.mu.try_lock() {
+			x.mu.unlock()
+		}
 		x.mu.destroy()
 		free(x.mu)
 		x.mu = nil
